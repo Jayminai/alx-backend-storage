@@ -1,29 +1,73 @@
 #!/usr/bin/env python3
-"""implementing an expiring web cache and tracker"""
-import redis
+"""
+Web module
+"""
+
 import requests
-r = redis.Redis()
+import redis
+from functools import wraps
 
-def get_page(url: str) -> str:
+class WebCache:
     """
-    Uses the requests module to obtain the HTML content of a particular URL and returns it.
+    WebCache class for caching and tracking web pages
     """
-    # Increment and set expiration for URL access count
-    if r.get(f"count:{url}"):
-        r.incr(f"count:{url}")
-        r.expire(f"count:{url}", 10)
-    else:
-        r.setex(f"count:{url}", 10, 1)
+    def __init__(self) -> None:
+        """
+        Initialize the WebCache instance and connect to Redis.
+        """
+        self._redis = redis.Redis()
 
-    # Check if HTML content is cached
-    cached_content = r.get(url)
-    if cached_content:
-        return cached_content.decode("utf-8")
+    def get_page(self, url: str) -> str:
+        """
+        Get the HTML content of a web page using the given URL.
+        Cache the result with an expiration time of 10 seconds.
+        Track the number of times the URL is accessed.
 
-    # Fetch and cache HTML content
-    req = requests.get(url)
-    r.setex(url, 10, req.text)
-    return req.text
+        :param url: The URL of the web page.
+        :type url: str
+        :return: The HTML content of the web page.
+        :rtype: str
+        """
+        count_key = f'count:{url}'
+        page_content = self._redis.get(url)
+        
+        if page_content is None:
+            response = requests.get(url)
+            page_content = response.text
+            self._redis.setex(url, 10, page_content)
+        
+        self._redis.incr(count_key)
+        
+        return page_content
+
+def track_url_access(method):
+    """
+    A decorator to track the number of times a URL is accessed.
+    """
+    @wraps(method)
+    def wrapper(self, url, *args, **kwargs):
+        count_key = f'count:{url}'
+        self._redis.incr(count_key)
+        return method(self, url, *args, **kwargs)
+    return wrapper
 
 if __name__ == "__main__":
-    print(get_page('http://slowwly.robertomurray.co.uk'))
+    web_cache = WebCache()
+
+    slow_url = "http://slowwly.robertomurray.co.uk/delay/5000/url/https://www.example.com"
+    page_content = web_cache.get_page(slow_url)
+    print(page_content)
+
+    page_content_cached = web_cache.get_page(slow_url)
+    print(page_content_cached)
+
+    fast_url = "https://www.example.com"
+    page_content_fast = web_cache.get_page(fast_url)
+    print(page_content_fast)
+
+    @track_url_access
+    def custom_get_page(self, url):
+        return self.get_page(url)
+
+    custom_page_content = custom_get_page(web_cache, slow_url)
+    print(custom_page_content)
